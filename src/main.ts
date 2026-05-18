@@ -280,6 +280,11 @@ function render(): void {
             HEIC to JPG comes first, but you can also move between JPG, PNG, WEBP, BMP, and AVIF.
             Upload one image or a whole batch, preview them, convert them, and download one by one or as a ZIP.
           </p>
+          <div class="hero__actions">
+            <button class="button button--primary button--hero-inline" type="button" data-action="open-files">
+              Upload images
+            </button>
+          </div>
           <div class="hero__route">
             <span class="hero__route-label">Current route</span>
             <strong>${escapeHtml(selectedSourceLabel)}</strong>
@@ -349,7 +354,7 @@ function render(): void {
           <span class="eyebrow">Step 1 · upload</span>
           <h2>Drop images here or choose them from your device.</h2>
           <p>HEIC to JPG is the default path, but the same flow works for every supported source.</p>
-          <button id="choose-files" class="button button--primary button--hero" type="button">
+          <button class="button button--primary button--hero" type="button" data-action="open-files">
             Upload images
           </button>
           <div class="dropzone__meta">
@@ -590,30 +595,32 @@ async function downloadZip(): Promise<void> {
 
 function bindEvents(): void {
   const fileInput = document.querySelector<HTMLInputElement>('#file-input');
-  const chooseFilesButton = document.querySelector<HTMLButtonElement>('#choose-files');
   const convertButton = document.querySelector<HTMLButtonElement>('#convert-files');
   const downloadZipButton = document.querySelector<HTMLButtonElement>('#download-zip');
   const clearFilesButton = document.querySelector<HTMLButtonElement>('#clear-files');
   const sourceSelect = document.querySelector<HTMLSelectElement>('#source-filter');
   const destinationSelect = document.querySelector<HTMLSelectElement>('#destination-format');
   const dropzone = document.querySelector<HTMLElement>('#dropzone');
+  const openFileButtons = document.querySelectorAll<HTMLButtonElement>('[data-action="open-files"]');
 
   if (
     !fileInput ||
-    !chooseFilesButton ||
     !convertButton ||
     !downloadZipButton ||
     !clearFilesButton ||
     !sourceSelect ||
     !destinationSelect ||
-    !dropzone
+    !dropzone ||
+    openFileButtons.length === 0
   ) {
     return;
   }
 
-  chooseFilesButton.addEventListener('click', (event) => {
-    event.stopPropagation();
-    fileInput.click();
+  openFileButtons.forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      fileInput.click();
+    });
   });
   convertButton.addEventListener('click', () => {
     void convertAll();
