@@ -36,6 +36,8 @@ interface SelectedItem {
   readonly converted?: ConvertedAsset;
 }
 
+type WorkflowStage = 'upload' | 'convert' | 'download';
+
 const appRoot = document.querySelector<HTMLDivElement>('#app');
 
 if (!appRoot) {
@@ -116,6 +118,98 @@ function renderNotices(): string {
     .join('');
 }
 
+function getWorkflowStage(convertedCount: number): WorkflowStage {
+  if (convertedCount > 0) {
+    return 'download';
+  }
+
+  if (state.items.length > 0) {
+    return 'convert';
+  }
+
+  return 'upload';
+}
+
+function renderWorkflowSteps(convertedCount: number): string {
+  const stage = getWorkflowStage(convertedCount);
+  const steps = [
+    {
+      key: 'upload' as const,
+      label: 'Upload',
+      detail: 'Single image or full batch',
+      state: state.items.length > 0 ? 'complete' : stage === 'upload' ? 'active' : 'idle',
+    },
+    {
+      key: 'convert' as const,
+      label: 'Convert',
+      detail: `Source to ${destinationLabel(state.destination)}`,
+      state: convertedCount > 0 ? 'complete' : stage === 'convert' ? 'active' : 'idle',
+    },
+    {
+      key: 'download' as const,
+      label: 'Download',
+      detail: 'One by one or as ZIP',
+      state: stage === 'download' ? 'active' : 'idle',
+    },
+  ];
+
+  return steps
+    .map(
+      (step, index) => `
+        <li class="step-card step-card--${step.state}">
+          <span class="step-card__index">0${index + 1}</span>
+          <div>
+            <strong>${step.label}</strong>
+            <p>${escapeHtml(step.detail)}</p>
+          </div>
+        </li>
+      `,
+    )
+    .join('');
+}
+
+function renderPrimaryAction(destinationText: string): string {
+  if (state.isPreparing) {
+    return `
+      <span class="button__content">
+        <span class="button__spinner" aria-hidden="true"></span>
+        Preparing previews
+      </span>
+    `;
+  }
+
+  if (state.isConverting) {
+    return `
+      <span class="button__content">
+        <span class="button__spinner" aria-hidden="true"></span>
+        ${escapeHtml(state.progressLabel || 'Converting')}
+      </span>
+    `;
+  }
+
+  return `<span class="button__content">Convert to ${escapeHtml(destinationText)}</span>`;
+}
+
+function renderActionHint(convertedCount: number): string {
+  if (state.isPreparing) {
+    return 'Preparing image previews so the batch is ready for conversion.';
+  }
+
+  if (state.isConverting) {
+    return 'Converting locally in your browser. Keep this tab open until the batch finishes.';
+  }
+
+  if (convertedCount > 0) {
+    return 'Downloads are ready. Grab single files from the cards or the full batch as a ZIP.';
+  }
+
+  if (state.items.length > 0) {
+    return `Everything is loaded. Review the previews, confirm ${destinationLabel(state.destination)}, and convert when ready.`;
+  }
+
+  return 'Start by uploading one image or a full batch. ZIP files stay disabled by design.';
+}
+
 function renderFileCards(): string {
   if (state.items.length === 0) {
     return `
@@ -128,6 +222,7 @@ function renderFileCards(): string {
 
   return state.items
     .map((item) => {
+      const cardStateClass = item.error ? 'card--error' : item.converted ? 'card--converted' : 'card--uploaded';
       const convertedMarkup = item.converted
         ? `
           <div class="card__result">
@@ -138,14 +233,14 @@ function renderFileCards(): string {
             Download
           </button>
         `
-        : '<span class="badge">Uploaded</span>';
+        : `<span class="badge ${item.error ? 'badge--error' : ''}">${item.error ? 'Needs attention' : 'Uploaded'}</span>`;
 
       const mediaMarkup = item.previewUrl
         ? `<img class="card__preview" src="${item.previewUrl}" alt="${escapeHtml(item.file.name)} preview" loading="lazy" />`
         : `<div class="card__preview card__preview--placeholder">${escapeHtml(formatKeyToLabel(item.sourceFormat))}</div>`;
 
       return `
-        <article class="card">
+        <article class="card ${cardStateClass}">
           <div class="card__media">
             ${mediaMarkup}
           </div>
@@ -170,70 +265,112 @@ function render(): void {
   const destinationLabel =
     DESTINATION_OPTIONS.find((option) => option.key === state.destination)?.label ?? 'JPG';
   const convertDisabled = state.items.length === 0 || state.isPreparing || state.isConverting;
+  const workflowMarkup = renderWorkflowSteps(convertedCount);
+  const actionHint = renderActionHint(convertedCount);
+  const selectedSourceLabel =
+    SOURCE_OPTIONS.find((option) => option.key === state.sourceFilter)?.label ?? 'Auto detect';
 
   app.innerHTML = `
     <main class="shell">
-      <section class="hero">
-        <div>
+      <section class="hero" aria-busy="${state.isPreparing || state.isConverting}">
+        <div class="hero__copywrap">
           <span class="eyebrow">100% local, in-browser conversion</span>
           <h1>Simple image conversion that never leaves your browser.</h1>
           <p class="hero__copy">
             HEIC to JPG comes first, but you can also move between JPG, PNG, WEBP, BMP, and AVIF.
             Upload one image or a whole batch, preview them, convert them, and download one by one or as a ZIP.
           </p>
+          <div class="hero__route">
+            <span class="hero__route-label">Current route</span>
+            <strong>${escapeHtml(selectedSourceLabel)}</strong>
+            <span aria-hidden="true">→</span>
+            <strong>${escapeHtml(destinationLabel)}</strong>
+          </div>
+          <ul class="step-grid" aria-label="Conversion workflow">
+            ${workflowMarkup}
+          </ul>
         </div>
 
-        <div class="controls">
-          <label class="field">
-            <span>Source</span>
-            <select id="source-filter">
-              ${SOURCE_OPTIONS.map(
-                (option) =>
-                  `<option value="${option.key}" ${option.key === state.sourceFilter ? 'selected' : ''}>${escapeHtml(option.label)}</option>`,
-              ).join('')}
-            </select>
-          </label>
+        <aside class="control-panel">
+          <div class="control-panel__header">
+            <span class="eyebrow">Conversion setup</span>
+            <p>Choose the direction once, then use the same flow for one file or the whole batch.</p>
+          </div>
 
-          <label class="field">
-            <span>Destination</span>
-            <select id="destination-format">
-              ${DESTINATION_OPTIONS.map(
-                (option) =>
-                  `<option value="${option.key}" ${option.key === state.destination ? 'selected' : ''}>${escapeHtml(option.label)}</option>`,
-              ).join('')}
-            </select>
-          </label>
+          <div class="controls">
+            <label class="field">
+              <span>Source</span>
+              <select id="source-filter">
+                ${SOURCE_OPTIONS.map(
+                  (option) =>
+                    `<option value="${option.key}" ${option.key === state.sourceFilter ? 'selected' : ''}>${escapeHtml(option.label)}</option>`,
+                ).join('')}
+              </select>
+            </label>
 
-          <button id="clear-files" class="button button--ghost" ${state.items.length === 0 ? 'disabled' : ''}>
-            Clear
+            <label class="field">
+              <span>Destination</span>
+              <select id="destination-format">
+                ${DESTINATION_OPTIONS.map(
+                  (option) =>
+                    `<option value="${option.key}" ${option.key === state.destination ? 'selected' : ''}>${escapeHtml(option.label)}</option>`,
+                ).join('')}
+              </select>
+            </label>
+          </div>
+
+          <div class="stat-strip" aria-label="Conversion summary">
+            <div class="stat-tile">
+              <span>Uploaded</span>
+              <strong>${state.items.length}</strong>
+            </div>
+            <div class="stat-tile">
+              <span>Ready</span>
+              <strong>${convertedCount}</strong>
+            </div>
+            <div class="stat-tile">
+              <span>Mode</span>
+              <strong>${state.items.length === 0 ? 'Idle' : state.items.length > 1 ? 'Batch' : 'Single'}</strong>
+            </div>
+          </div>
+
+          <button id="clear-files" class="button button--ghost button--full" ${state.items.length === 0 ? 'disabled' : ''}>
+            Clear selection
           </button>
-        </div>
+        </aside>
       </section>
 
       <section class="dropzone ${state.dragActive ? 'dropzone--active' : ''}" id="dropzone" tabindex="0" role="button" aria-label="Choose images or drop them here">
         <input id="file-input" type="file" accept="${FILE_INPUT_ACCEPT}" multiple hidden />
         <div class="dropzone__content">
-          <span class="eyebrow">Single or batch upload</span>
-          <h2>Drop images here</h2>
-          <p>or use the big upload button</p>
-          <button id="choose-files" class="button button--primary" type="button">
+          <div class="dropzone__icon" aria-hidden="true">
+            <span></span>
+          </div>
+          <span class="eyebrow">Step 1 · upload</span>
+          <h2>Drop images here or choose them from your device.</h2>
+          <p>HEIC to JPG is the default path, but the same flow works for every supported source.</p>
+          <button id="choose-files" class="button button--primary button--hero" type="button">
             Upload images
           </button>
-          <p class="dropzone__hint">No ZIP uploads. Unsupported files are rejected before conversion.</p>
+          <div class="dropzone__meta">
+            <p class="dropzone__hint">No ZIP uploads. Unsupported files are rejected before conversion.</p>
+            <p class="dropzone__hint">Drag and drop works for single images and batches.</p>
+          </div>
         </div>
       </section>
 
       <section class="action-bar">
         <div class="action-bar__summary">
-          <strong>${state.items.length}</strong>
-          <span>uploaded</span>
-          <strong>${convertedCount}</strong>
-          <span>converted</span>
+          <span class="eyebrow">Step 2 · convert</span>
+          <strong>${escapeHtml(actionHint)}</strong>
+          <div class="progress-track" aria-hidden="true">
+            <span class="progress-track__fill" style="width: ${convertedCount > 0 ? '100%' : state.items.length > 0 ? '58%' : '18%'}"></span>
+          </div>
         </div>
 
         <div class="action-bar__buttons">
           <button id="convert-files" class="button button--primary" ${convertDisabled ? 'disabled' : ''}>
-            ${state.isPreparing ? 'Preparing previews…' : state.isConverting ? escapeHtml(state.progressLabel || 'Converting…') : `Convert to ${escapeHtml(destinationLabel)}`}
+            ${renderPrimaryAction(destinationLabel)}
           </button>
           <button
             id="download-zip"
@@ -273,7 +410,10 @@ function onDestinationChange(nextDestination: OutputFormatKey): void {
   setNotices([
     {
       tone: 'neutral',
-      text: `Destination updated to ${DESTINATION_OPTIONS.find((option) => option.key === nextDestination)?.label ?? nextDestination}. Run conversion again to refresh downloads.`,
+      text:
+        state.items.length > 0
+          ? `Destination updated to ${DESTINATION_OPTIONS.find((option) => option.key === nextDestination)?.label ?? nextDestination}. Run conversion again to refresh downloads.`
+          : `Destination updated to ${DESTINATION_OPTIONS.find((option) => option.key === nextDestination)?.label ?? nextDestination}. Upload files when you're ready to convert.`,
     },
   ]);
   render();
