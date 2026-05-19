@@ -110,7 +110,7 @@ function renderNotices(): string {
   return state.notices
     .map(
       (notice) => `
-        <div class="notice notice--${notice.tone}">
+        <div class="notice notice--${notice.tone}" ${notice.tone === 'error' ? 'role="alert"' : 'role="status"'}>
           ${escapeHtml(notice.text)}
         </div>
       `,
@@ -271,7 +271,8 @@ function render(): void {
     SOURCE_OPTIONS.find((option) => option.key === state.sourceFilter)?.label ?? 'Auto detect';
 
   app.innerHTML = `
-    <main class="shell">
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <main class="shell" id="main-content">
       <section class="hero" aria-busy="${state.isPreparing || state.isConverting}">
         <div class="hero__copywrap">
           <span class="eyebrow">100% local, in-browser conversion</span>
@@ -296,7 +297,7 @@ function render(): void {
           </ul>
         </div>
 
-        <aside class="control-panel">
+        <div class="control-panel">
           <div class="control-panel__header">
             <span class="eyebrow">Conversion setup</span>
             <p>Choose the direction once, then use the same flow for one file or the whole batch.</p>
@@ -342,10 +343,10 @@ function render(): void {
           <button id="clear-files" class="button button--ghost button--full" ${state.items.length === 0 ? 'disabled' : ''}>
             Clear selection
           </button>
-        </aside>
+        </div>
       </section>
 
-      <section class="dropzone ${state.dragActive ? 'dropzone--active' : ''}" id="dropzone" tabindex="0" role="button" aria-label="Choose images or drop them here">
+      <section class="dropzone ${state.dragActive ? 'dropzone--active' : ''}" id="dropzone" aria-label="Choose images or drop them here">
         <input id="file-input" type="file" accept="${FILE_INPUT_ACCEPT}" multiple hidden />
         <div class="dropzone__content">
           <div class="dropzone__icon" aria-hidden="true">
