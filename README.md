@@ -31,6 +31,7 @@ All processing happens locally in the browser. Files are never uploaded to a bac
 ```bash
 npm install
 npm run test
+npm run test:e2e
 npm run build
 npm run dev
 ```
@@ -39,7 +40,7 @@ npm run dev
 
 The repository includes:
 
-- `.github/workflows/ci.yml` for install, test, and build validation
+- `.github/workflows/ci.yml` for unit tests, WCAG E2E checks, and build validation
 - `.github/workflows/deploy-pages.yml` for GitHub Pages publishing from `main`
 
 To enable Pages:
@@ -53,5 +54,6 @@ The Vite base path is already configured for the repository name `InBrowserLocal
 ## Testing and guarantees
 
 - Unit tests cover format detection, validation, and file naming helpers.
+- Playwright + axe validates empty, uploaded, and converted states in both dark and light themes with zero WCAG violations.
 - Builds run through TypeScript and Vite.
-- CI and deployment both run the test suite before building.
+- CI runs unit tests, browser accessibility checks, and the production build before Pages deployment.
