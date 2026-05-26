@@ -8,12 +8,11 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:4173',
     trace: 'on-first-retry',
   },
+  // NOTE: CI must run `npm run build` before `npm run test:e2e` so dist/ exists for preview.
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 4173',
+    command: 'npm run preview -- --port 4173 --strictPort',
     url: 'http://127.0.0.1:4173',
-    reuseExistingServer: true,
-    stdout: 'ignore',
-    stderr: 'pipe',
+    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
   projects: [
