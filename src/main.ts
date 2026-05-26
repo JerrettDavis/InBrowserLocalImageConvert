@@ -895,9 +895,19 @@ async function runOcrAll(): Promise<void> {
   state.ocr.isRunning = true;
   render();
 
+  const runOcrFn: typeof runOcr = (window as any).__ocrTestMode
+    ? async (file: File, id: string, _opts?: Parameters<typeof runOcr>[2]): Promise<OcrResult> => ({
+        id,
+        fileName: file.name,
+        text: (window as any).__ocrTestMode.text ?? 'TEST RECEIPT\n2025-03-14\nCoffee  4.50\nMuffin  3.25\nTotal  7.75',
+        confidence: 99,
+        words: [],
+      })
+    : runOcr;
+
   for (const item of state.items) {
     try {
-      const result = await runOcr(item.file, item.id, {
+      const result = await runOcrFn(item.file, item.id, {
         onProgress: ({ ratio }) => {
           state.ocr.progress[item.id] = ratio;
           if (shouldRenderOcrProgress(item.id, ratio)) {
