@@ -7,7 +7,12 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 1600,
   },
+  optimizeDeps: {
+    exclude: ['tesseract.js'],
+  },
   test: {
     include: ['src/**/*.test.ts'],
+    environment: 'jsdom',
+    setupFiles: ['./src/test-setup.ts'],
   },
 });

@@ -13,8 +13,13 @@ import {
 import { buildConvertedFileName, buildZipFileName, formatFileSize, validateFiles } from './lib/files';
 import { convertImageFile, createPreviewUrl, revokeObjectUrl } from './lib/convert';
 import { createZipBlob, downloadBlob } from './lib/downloads';
+import { runOcr, terminateOcr } from './lib/ocr';
+import { parseReceipt } from './lib/receipt-parser';
+import { buildExport } from './lib/export';
+import type { OcrResult, ExportFormat } from './lib/ocr-types';
 
 type NoticeTone = 'neutral' | 'error' | 'success';
+type Mode = 'convert' | 'ocr';
 
 interface AppNotice {
   readonly tone: NoticeTone;
@@ -38,6 +43,9 @@ interface SelectedItem {
 
 type WorkflowStage = 'upload' | 'convert' | 'download';
 
+// Track last-rendered progress per item for throttling
+const lastRenderedProgress: Record<string, number> = {};
+
 const appRoot = document.querySelector<HTMLDivElement>('#app');
 
 if (!appRoot) {
@@ -60,6 +68,15 @@ const state = {
   isConverting: false,
   dragActive: false,
   progressLabel: '',
+  mode: 'convert' as Mode,
+  ocr: {
+    results: {} as Record<string, OcrResult>,
+    progress: {} as Record<string, number>,
+    isRunning: false,
+    exportFormat: 'txt' as ExportFormat,
+    receiptMode: false,
+    combined: true,
+  },
 };
 
 function escapeHtml(value: string): string {
@@ -260,7 +277,272 @@ function renderFileCards(): string {
     .join('');
 }
 
+// ── OCR render helpers ────────────────────────────────────────────────────────
+
+function confidenceLevel(confidence: number): 'high' | 'mid' | 'low' {
+  if (confidence >= 85) return 'high';
+  if (confidence >= 60) return 'mid';
+  return 'low';
+}
+
+function renderOcrCards(): string {
+  if (state.items.length === 0) {
+    return `
+      <div class="empty-state">
+        <h2>No images loaded yet</h2>
+        <p>Drop images here or use the upload button, then run OCR.</p>
+      </div>
+    `;
+  }
+
+  return state.items
+    .map((item) => {
+      const result = state.ocr.results[item.id];
+      const progress = state.ocr.progress[item.id] ?? 0;
+      const isRunning = state.ocr.isRunning;
+
+      const mediaMarkup = item.previewUrl
+        ? `<img class="card__preview" src="${item.previewUrl}" alt="${escapeHtml(item.file.name)} preview" loading="lazy" />`
+        : `<div class="card__preview card__preview--placeholder">${escapeHtml(formatKeyToLabel(item.sourceFormat))}</div>`;
+
+      let statusBlock = '';
+      if (result?.error) {
+        statusBlock = `<p class="card__error">${escapeHtml(result.error)}</p>`;
+      } else if (result) {
+        const level = confidenceLevel(result.confidence);
+        const confLabel = level === 'high' ? 'High' : level === 'mid' ? 'Mid' : 'Low';
+
+        let receiptSummary = '';
+        if (state.ocr.receiptMode && result.parsed) {
+          const p = result.parsed;
+          const itemCount = p.items.length;
+          receiptSummary = `
+            <div class="ocr-receipt-summary">
+              ${p.merchant ? `<strong>${escapeHtml(p.merchant)}</strong>` : ''}
+              ${p.date ? `<span>${escapeHtml(p.date)}</span>` : ''}
+              ${p.total !== undefined ? `<span>Total: ${p.currency ? escapeHtml(p.currency) + ' ' : ''}${p.total.toFixed(2)}</span>` : ''}
+              <span>${itemCount} line item${itemCount === 1 ? '' : 's'}</span>
+            </div>
+          `;
+        }
+
+        statusBlock = `
+          <div class="ocr-card__confidence-row">
+            <span class="confidence-badge confidence-badge--${level}" aria-label="Confidence: ${confLabel}">${confLabel} (${Math.round(result.confidence)}%)</span>
+          </div>
+          ${receiptSummary}
+          <textarea
+            class="ocr-card__text"
+            data-action="edit-ocr-text"
+            data-id="${item.id}"
+            aria-label="Extracted text for ${escapeHtml(item.file.name)}"
+          ></textarea>
+        `;
+      } else if (isRunning && progress > 0) {
+        statusBlock = `<p class="ocr-card__pending">Processing&#x2026;</p>`;
+      } else {
+        statusBlock = `<p class="ocr-card__pending">Ready to run OCR</p>`;
+      }
+
+      const progressPct = Math.round(progress * 100);
+      const progressBar = (isRunning || progress > 0)
+        ? `<div class="ocr-progress" role="progressbar" aria-valuenow="${progressPct}" aria-valuemin="0" aria-valuemax="100">
+             <div class="ocr-progress__fill" style="width: ${progressPct}%"></div>
+           </div>`
+        : '';
+
+      const downloadBtn = result && !result.error
+        ? `<button class="button button--ghost" data-action="download-ocr-single" data-id="${item.id}">Download</button>`
+        : '';
+
+      return `
+        <article class="card ocr-card" data-id="${item.id}">
+          <div class="card__media">
+            ${mediaMarkup}
+          </div>
+          <div class="card__body">
+            <div class="card__meta">
+              <strong>${escapeHtml(item.file.name)}</strong>
+              <span>${escapeHtml(formatFileSize(item.file.size))}</span>
+            </div>
+            ${progressBar}
+            ${statusBlock}
+            <div class="ocr-card__actions">
+              ${downloadBtn}
+              <button class="button button--ghost" data-action="remove-item" data-id="${item.id}">Remove</button>
+            </div>
+          </div>
+        </article>
+      `;
+    })
+    .join('');
+}
+
+function renderOcrControlPanel(): string {
+  const completedResults = Object.values(state.ocr.results).filter(r => !r.error);
+  const hasResults = completedResults.length > 0;
+  const runDisabled = state.items.length === 0 || state.ocr.isRunning;
+  const downloadAllDisabled = !hasResults || state.ocr.isRunning;
+
+  return `
+    <div class="ocr-panel">
+      <div class="ocr-panel__header">
+        <span class="eyebrow">OCR setup</span>
+        <p>Extract text from images locally in your browser.</p>
+      </div>
+
+      <div class="controls">
+        <label class="field">
+          <span>Export format</span>
+          <select data-action="set-ocr-format" aria-label="OCR export format">
+            <option value="txt" ${state.ocr.exportFormat === 'txt' ? 'selected' : ''}>Plain Text (.txt)</option>
+            <option value="csv" ${state.ocr.exportFormat === 'csv' ? 'selected' : ''}>CSV (.csv)</option>
+            <option value="xlsx" ${state.ocr.exportFormat === 'xlsx' ? 'selected' : ''}>Excel (.xlsx)</option>
+          </select>
+        </label>
+
+        <label class="ocr-panel__check">
+          <input type="checkbox" data-action="toggle-receipt-mode" ${state.ocr.receiptMode ? 'checked' : ''} />
+          <span>Receipt mode (beta) &#x2014; parse merchant, totals &amp; line items</span>
+        </label>
+
+        <label class="ocr-panel__check">
+          <input type="checkbox" data-action="toggle-combined" ${state.ocr.combined ? 'checked' : ''} />
+          <span>Combined output &#x2014; merge all results into one file</span>
+        </label>
+      </div>
+
+      <div class="stat-strip" aria-label="OCR summary">
+        <div class="stat-tile">
+          <span>Loaded</span>
+          <strong>${state.items.length}</strong>
+        </div>
+        <div class="stat-tile">
+          <span>Done</span>
+          <strong>${completedResults.length}</strong>
+        </div>
+        <div class="stat-tile">
+          <span>Status</span>
+          <strong>${state.ocr.isRunning ? 'Running' : hasResults ? 'Ready' : 'Idle'}</strong>
+        </div>
+      </div>
+
+      <button class="button button--primary button--full" data-action="run-ocr" ${runDisabled ? 'disabled' : ''}>
+        ${state.ocr.isRunning
+          ? `<span class="button__content"><span class="button__spinner" aria-hidden="true"></span>Running OCR&#x2026;</span>`
+          : `<span class="button__content">Run OCR</span>`
+        }
+      </button>
+
+      <button class="button button--ghost button--full" data-action="download-ocr-all" ${downloadAllDisabled ? 'disabled' : ''}>
+        Download all
+      </button>
+
+      <button class="button button--ghost button--full" data-action="clear-ocr-results" ${!hasResults ? 'disabled' : ''}>
+        Clear results
+      </button>
+    </div>
+  `;
+}
+
+function renderModeToggle(): string {
+  return `
+    <div class="mode-toggle" role="group" aria-label="App mode">
+      <button
+        class="mode-toggle__btn"
+        data-action="set-mode"
+        data-mode="convert"
+        aria-pressed="${state.mode === 'convert'}"
+        type="button"
+      >Convert</button>
+      <button
+        class="mode-toggle__btn"
+        data-action="set-mode"
+        data-mode="ocr"
+        aria-pressed="${state.mode === 'ocr'}"
+        type="button"
+      >OCR</button>
+    </div>
+  `;
+}
+
 function render(): void {
+  if (state.mode === 'convert') {
+    renderConvertMode();
+  } else {
+    renderOcrMode();
+  }
+}
+
+function renderOcrMode(): void {
+  app.innerHTML = `
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <main class="shell" id="main-content">
+      ${renderModeToggle()}
+
+      <section class="hero" aria-busy="${state.ocr.isRunning}">
+        <div class="hero__copywrap">
+          <span class="eyebrow">100% local, in-browser OCR</span>
+          <h1>Extract text from images without leaving your browser.</h1>
+          <p class="hero__copy">
+            Drop image files below, run OCR, then edit and download the results as plain text, CSV, or Excel.
+            Optionally enable Receipt mode to parse merchant names, totals and line items.
+          </p>
+          <div class="hero__actions">
+            <button class="button button--primary button--hero-inline" type="button" data-action="open-files">
+              Upload images
+            </button>
+          </div>
+        </div>
+
+        ${renderOcrControlPanel()}
+      </section>
+
+      <section class="dropzone ${state.dragActive ? 'dropzone--active' : ''}" id="dropzone" aria-label="Choose images or drop them here">
+        <input id="file-input" type="file" accept="${FILE_INPUT_ACCEPT}" multiple hidden />
+        <div class="dropzone__content">
+          <div class="dropzone__icon" aria-hidden="true">
+            <span></span>
+          </div>
+          <span class="eyebrow">Step 1 &#xB7; upload</span>
+          <h2>Drop images here or choose them from your device.</h2>
+          <p>Upload your images, then click <strong>Run OCR</strong> to extract text.</p>
+          <button class="button button--primary button--hero" type="button" data-action="open-files">
+            Upload images
+          </button>
+          <div class="dropzone__meta">
+            <p class="dropzone__hint">No ZIP uploads. Unsupported files are rejected.</p>
+            <p class="dropzone__hint">Drag and drop works for single images and batches.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="notices" aria-live="polite">
+        ${renderNotices()}
+      </section>
+
+      <section class="grid ocr-grid" aria-live="polite">
+        ${renderOcrCards()}
+      </section>
+    </main>
+  `;
+
+  // Populate textareas after innerHTML to avoid </textarea> injection issues
+  for (const item of state.items) {
+    const result = state.ocr.results[item.id];
+    if (!result || result.error) continue;
+    const textarea = app.querySelector<HTMLTextAreaElement>(
+      `textarea[data-action="edit-ocr-text"][data-id="${CSS.escape(item.id)}"]`,
+    );
+    if (textarea) {
+      textarea.value = result.text;
+    }
+  }
+
+  bindEvents();
+}
+
+function renderConvertMode(): void {
   const convertedCount = state.items.filter((item) => item.converted).length;
   const destinationLabel =
     DESTINATION_OPTIONS.find((option) => option.key === state.destination)?.label ?? 'JPG';
@@ -273,6 +555,8 @@ function render(): void {
   app.innerHTML = `
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <main class="shell" id="main-content">
+      ${renderModeToggle()}
+
       <section class="hero" aria-busy="${state.isPreparing || state.isConverting}">
         <div class="hero__copywrap">
           <span class="eyebrow">100% local, in-browser conversion</span>
@@ -500,10 +784,14 @@ async function loadFiles(files: File[]): Promise<void> {
   state.items = preparedItems;
   state.isPreparing = false;
 
+  // Clear OCR state when new files are loaded
+  state.ocr.results = {};
+  state.ocr.progress = {};
+
   const notices: AppNotice[] = [
     {
       tone: 'success',
-      text: `${preparedItems.length} file${preparedItems.length === 1 ? '' : 's'} ready for conversion.`,
+      text: `${preparedItems.length} file${preparedItems.length === 1 ? '' : 's'} ready${state.mode === 'ocr' ? ' for OCR' : ' for conversion'}.`,
     },
     ...errors.map((error) => ({ tone: 'error' as const, text: error })),
   ];
@@ -594,58 +882,118 @@ async function downloadZip(): Promise<void> {
   downloadBlob(zipBlob, buildZipFileName(state.destination));
 }
 
+// ── OCR logic ─────────────────────────────────────────────────────────────────
+
+function shouldRenderOcrProgress(itemId: string, ratio: number): boolean {
+  const last = lastRenderedProgress[itemId] ?? -1;
+  return ratio - last >= 0.05 || ratio >= 1;
+}
+
+async function runOcrAll(): Promise<void> {
+  if (state.items.length === 0 || state.ocr.isRunning) return;
+
+  state.ocr.isRunning = true;
+  render();
+
+  const runOcrFn: typeof runOcr = (window as any).__ocrTestMode
+    ? async (file: File, id: string, _opts?: Parameters<typeof runOcr>[2]): Promise<OcrResult> => ({
+        id,
+        fileName: file.name,
+        text: (window as any).__ocrTestMode.text ?? 'TEST RECEIPT\n2025-03-14\nCoffee  4.50\nMuffin  3.25\nTotal  7.75',
+        confidence: 99,
+        words: [],
+      })
+    : runOcr;
+
+  for (const item of state.items) {
+    try {
+      const result = await runOcrFn(item.file, item.id, {
+        onProgress: ({ ratio }) => {
+          state.ocr.progress[item.id] = ratio;
+          if (shouldRenderOcrProgress(item.id, ratio)) {
+            lastRenderedProgress[item.id] = ratio;
+            render();
+          }
+        },
+      });
+      const parsed = state.ocr.receiptMode ? parseReceipt(result.text) : undefined;
+      state.ocr.results[item.id] = parsed !== undefined ? { ...result, parsed } : result;
+      state.ocr.progress[item.id] = 1;
+    } catch (e) {
+      state.ocr.results[item.id] = {
+        id: item.id,
+        fileName: item.file.name,
+        text: '',
+        confidence: 0,
+        error: e instanceof Error ? e.message : String(e),
+      };
+      setNotices([{ tone: 'error', text: `OCR failed for ${item.file.name}: ${String(e)}` }]);
+    }
+    render();
+  }
+
+  state.ocr.isRunning = false;
+  const doneCount = Object.values(state.ocr.results).filter(r => !r.error).length;
+  setNotices([{
+    tone: doneCount > 0 ? 'success' : 'error',
+    text: `OCR complete. ${doneCount} of ${state.items.length} file${state.items.length === 1 ? '' : 's'} processed successfully.`,
+  }]);
+  render();
+}
+
+async function downloadOcrSingle(itemId: string): Promise<void> {
+  const result = state.ocr.results[itemId];
+  if (!result || result.error) return;
+
+  const artifacts = await buildExport(
+    [result],
+    state.ocr.exportFormat,
+    { combined: false, receiptMode: state.ocr.receiptMode },
+  );
+
+  if (artifacts.length === 1) {
+    downloadBlob(artifacts[0].blob, artifacts[0].fileName);
+  } else {
+    const zip = await createZipBlob(artifacts.map(a => ({ fileName: a.fileName, blob: a.blob })));
+    downloadBlob(zip, `ocr-${Date.now()}.zip`);
+  }
+}
+
+async function downloadOcrAll(): Promise<void> {
+  const results = Object.values(state.ocr.results).filter(r => !r.error);
+  if (results.length === 0) return;
+
+  const artifacts = await buildExport(
+    results,
+    state.ocr.exportFormat,
+    { combined: state.ocr.combined, receiptMode: state.ocr.receiptMode },
+  );
+
+  if (artifacts.length === 1) {
+    downloadBlob(artifacts[0].blob, artifacts[0].fileName);
+  } else {
+    const zip = await createZipBlob(artifacts.map(a => ({ fileName: a.fileName, blob: a.blob })));
+    downloadBlob(zip, `ocr-results-${Date.now()}.zip`);
+  }
+}
+
+// ── Event binding ─────────────────────────────────────────────────────────────
+
 function bindEvents(): void {
   const fileInput = document.querySelector<HTMLInputElement>('#file-input');
-  const convertButton = document.querySelector<HTMLButtonElement>('#convert-files');
-  const downloadZipButton = document.querySelector<HTMLButtonElement>('#download-zip');
-  const clearFilesButton = document.querySelector<HTMLButtonElement>('#clear-files');
-  const sourceSelect = document.querySelector<HTMLSelectElement>('#source-filter');
-  const destinationSelect = document.querySelector<HTMLSelectElement>('#destination-format');
   const dropzone = document.querySelector<HTMLElement>('#dropzone');
   const openFileButtons = document.querySelectorAll<HTMLButtonElement>('[data-action="open-files"]');
 
-  if (
-    !fileInput ||
-    !convertButton ||
-    !downloadZipButton ||
-    !clearFilesButton ||
-    !sourceSelect ||
-    !destinationSelect ||
-    !dropzone ||
-    openFileButtons.length === 0
-  ) {
+  if (!fileInput || !dropzone || openFileButtons.length === 0) {
     return;
   }
 
+  // Shared: file input + dropzone
   openFileButtons.forEach((button) => {
     button.addEventListener('click', (event) => {
       event.stopPropagation();
       fileInput.click();
     });
-  });
-  convertButton.addEventListener('click', () => {
-    void convertAll();
-  });
-  downloadZipButton.addEventListener('click', () => {
-    void downloadZip();
-  });
-  clearFilesButton.addEventListener('click', () => {
-    resetItems();
-    setNotices([
-      {
-        tone: 'neutral',
-        text: 'Selection cleared.',
-      },
-    ]);
-    render();
-  });
-
-  sourceSelect.addEventListener('change', (event) => {
-    onSourceChange((event.currentTarget as HTMLSelectElement).value as SourceFormatKey);
-  });
-
-  destinationSelect.addEventListener('change', (event) => {
-    onDestinationChange((event.currentTarget as HTMLSelectElement).value as OutputFormatKey);
   });
 
   fileInput.addEventListener('change', async () => {
@@ -673,7 +1021,6 @@ function bindEvents(): void {
     if (nextTarget instanceof Node && dropzone.contains(nextTarget)) {
       return;
     }
-
     if (state.dragActive) {
       state.dragActive = false;
       render();
@@ -686,22 +1033,207 @@ function bindEvents(): void {
     void loadFiles(droppedFiles);
   });
 
+  // Mode toggle (present in both modes)
+  document.querySelectorAll<HTMLButtonElement>('[data-action="set-mode"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const mode = button.dataset.mode as Mode | undefined;
+      if (mode && mode !== state.mode) {
+        state.mode = mode;
+        render();
+      }
+    });
+  });
+
+  if (state.mode === 'convert') {
+    bindConvertEvents();
+  } else {
+    bindOcrEvents();
+  }
+}
+
+function bindConvertEvents(): void {
+  const convertButton = document.querySelector<HTMLButtonElement>('#convert-files');
+  const downloadZipButton = document.querySelector<HTMLButtonElement>('#download-zip');
+  const clearFilesButton = document.querySelector<HTMLButtonElement>('#clear-files');
+  const sourceSelect = document.querySelector<HTMLSelectElement>('#source-filter');
+  const destinationSelect = document.querySelector<HTMLSelectElement>('#destination-format');
+
+  if (!convertButton || !downloadZipButton || !clearFilesButton || !sourceSelect || !destinationSelect) {
+    return;
+  }
+
+  convertButton.addEventListener('click', () => {
+    void convertAll();
+  });
+  downloadZipButton.addEventListener('click', () => {
+    void downloadZip();
+  });
+  clearFilesButton.addEventListener('click', () => {
+    resetItems();
+    setNotices([{ tone: 'neutral', text: 'Selection cleared.' }]);
+    render();
+  });
+  sourceSelect.addEventListener('change', (event) => {
+    onSourceChange((event.currentTarget as HTMLSelectElement).value as SourceFormatKey);
+  });
+  destinationSelect.addEventListener('change', (event) => {
+    onDestinationChange((event.currentTarget as HTMLSelectElement).value as OutputFormatKey);
+  });
+
   document.querySelectorAll<HTMLButtonElement>('[data-action="download-item"]').forEach((button) => {
     button.addEventListener('click', () => {
       const id = button.dataset.id;
       const item = state.items.find((current) => current.id === id);
-
-      if (!item?.converted) {
-        return;
-      }
-
+      if (!item?.converted) return;
       downloadBlob(item.converted.blob, item.converted.fileName);
+    });
+  });
+}
+
+function bindOcrEvents(): void {
+  // Format select
+  const formatSelect = document.querySelector<HTMLSelectElement>('[data-action="set-ocr-format"]');
+  if (formatSelect) {
+    formatSelect.addEventListener('change', () => {
+      state.ocr.exportFormat = formatSelect.value as ExportFormat;
+    });
+  }
+
+  // Receipt mode toggle
+  const receiptCheck = document.querySelector<HTMLInputElement>('[data-action="toggle-receipt-mode"]');
+  if (receiptCheck) {
+    receiptCheck.addEventListener('change', () => {
+      state.ocr.receiptMode = receiptCheck.checked;
+      // Re-parse all existing results
+      for (const [id, result] of Object.entries(state.ocr.results)) {
+        if (!result.error) {
+          const parsed = state.ocr.receiptMode ? parseReceipt(result.text) : undefined;
+          state.ocr.results[id] = parsed !== undefined
+            ? { ...result, parsed }
+            : { ...result, parsed: undefined };
+        }
+      }
+      render();
+    });
+  }
+
+  // Combined toggle
+  const combinedCheck = document.querySelector<HTMLInputElement>('[data-action="toggle-combined"]');
+  if (combinedCheck) {
+    combinedCheck.addEventListener('change', () => {
+      state.ocr.combined = combinedCheck.checked;
+    });
+  }
+
+  // Run OCR
+  const runBtn = document.querySelector<HTMLButtonElement>('[data-action="run-ocr"]');
+  if (runBtn) {
+    runBtn.addEventListener('click', () => {
+      void runOcrAll();
+    });
+  }
+
+  // Download all
+  const downloadAllBtn = document.querySelector<HTMLButtonElement>('[data-action="download-ocr-all"]');
+  if (downloadAllBtn) {
+    downloadAllBtn.addEventListener('click', () => {
+      void downloadOcrAll();
+    });
+  }
+
+  // Clear results
+  const clearResultsBtn = document.querySelector<HTMLButtonElement>('[data-action="clear-ocr-results"]');
+  if (clearResultsBtn) {
+    clearResultsBtn.addEventListener('click', () => {
+      state.ocr.results = {};
+      state.ocr.progress = {};
+      setNotices([{ tone: 'neutral', text: 'OCR results cleared.' }]);
+      render();
+    });
+  }
+
+  // Per-card: download single
+  document.querySelectorAll<HTMLButtonElement>('[data-action="download-ocr-single"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.dataset.id;
+      if (!id) return;
+      void downloadOcrSingle(id);
+    });
+  });
+
+  // Per-card: remove item
+  document.querySelectorAll<HTMLButtonElement>('[data-action="remove-item"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.dataset.id;
+      if (!id) return;
+      const item = state.items.find(i => i.id === id);
+      if (item) {
+        revokeObjectUrl(item.previewUrl);
+        revokeObjectUrl(item.converted?.url);
+      }
+      state.items = state.items.filter(i => i.id !== id);
+      delete state.ocr.results[id];
+      delete state.ocr.progress[id];
+      delete lastRenderedProgress[id];
+      render();
+    });
+  });
+
+  // Per-card: edit OCR text (textarea input event)
+  document.querySelectorAll<HTMLTextAreaElement>('[data-action="edit-ocr-text"]').forEach((textarea) => {
+    textarea.addEventListener('input', () => {
+      const id = textarea.dataset.id;
+      if (!id) return;
+      const existing = state.ocr.results[id];
+      if (!existing || existing.error) return;
+      const newText = textarea.value;
+      const parsed = state.ocr.receiptMode ? parseReceipt(newText) : undefined;
+      state.ocr.results[id] = parsed !== undefined
+        ? { ...existing, text: newText, parsed }
+        : { ...existing, text: newText, parsed: undefined };
+      // Surgically update only the receipt summary to preserve textarea cursor
+      if (state.ocr.receiptMode) {
+        const card = textarea.closest<HTMLElement>('.ocr-card');
+        if (card) {
+          const summaryEl = card.querySelector<HTMLElement>('.ocr-receipt-summary');
+          const updatedResult = state.ocr.results[id];
+          if (updatedResult && !updatedResult.error && updatedResult.parsed) {
+            const p = updatedResult.parsed;
+            const div = document.createElement('div');
+            div.className = 'ocr-receipt-summary';
+            if (p.merchant) {
+              const strong = document.createElement('strong');
+              strong.textContent = p.merchant;
+              div.appendChild(strong);
+            }
+            if (p.date) {
+              const span = document.createElement('span');
+              span.textContent = p.date;
+              div.appendChild(span);
+            }
+            if (p.total !== undefined) {
+              const span = document.createElement('span');
+              span.textContent = `Total: ${p.currency ? p.currency + ' ' : ''}${p.total.toFixed(2)}`;
+              div.appendChild(span);
+            }
+            const countSpan = document.createElement('span');
+            countSpan.textContent = `${p.items.length} line item${p.items.length === 1 ? '' : 's'}`;
+            div.appendChild(countSpan);
+            if (summaryEl) {
+              summaryEl.replaceWith(div);
+            } else {
+              textarea.insertAdjacentElement('beforebegin', div);
+            }
+          }
+        }
+      }
     });
   });
 }
 
 window.addEventListener('beforeunload', () => {
   releaseItemResources(state.items);
+  void terminateOcr();
 });
 
 render();
