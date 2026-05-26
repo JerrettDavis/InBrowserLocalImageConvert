@@ -803,3 +803,235 @@ h2 {
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Mode toggle ──────────────────────────────────────────────────────────── */
+
+.mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-raised);
+}
+
+.mode-toggle__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.92rem;
+  letter-spacing: -0.01em;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.mode-toggle__btn + .mode-toggle__btn {
+  border-left: 1px solid var(--line-strong);
+}
+
+.mode-toggle__btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--button-primary-text);
+}
+
+.mode-toggle__btn:hover:not([aria-pressed="true"]):not(:disabled) {
+  background: var(--surface-strong);
+  color: var(--text);
+  transform: none;
+}
+
+/* ── OCR control panel ────────────────────────────────────────────────────── */
+
+.ocr-panel {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-strong);
+}
+
+.ocr-panel__header {
+  display: grid;
+  gap: 6px;
+}
+
+.ocr-panel__header p {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.ocr-panel__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.ocr-panel__check input[type="checkbox"] {
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* ── OCR cards ────────────────────────────────────────────────────────────── */
+
+.ocr-card {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+.ocr-card__confidence-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.ocr-card__text {
+  width: 100%;
+  min-height: 12rem;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  line-height: 1.55;
+  resize: vertical;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.ocr-card__text:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-color: var(--line-strong);
+}
+
+.ocr-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.ocr-card__pending {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  margin: 4px 0;
+}
+
+/* ── Confidence badge ─────────────────────────────────────────────────────── */
+
+.confidence-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 0.73rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.confidence-badge--high {
+  background: var(--success-bg);
+  border-color: rgba(31, 91, 58, 0.24);
+  color: var(--success);
+}
+
+.confidence-badge--mid {
+  background: rgba(120, 90, 20, 0.18);
+  border-color: rgba(180, 140, 40, 0.28);
+  color: #c9a227;
+}
+
+@media (prefers-color-scheme: light) {
+  .confidence-badge--mid {
+    background: rgba(180, 140, 40, 0.1);
+    color: #7a6010;
+  }
+}
+
+.confidence-badge--low {
+  background: var(--error-bg);
+  border-color: rgba(171, 47, 47, 0.24);
+  color: var(--error);
+}
+
+/* ── OCR progress bar ─────────────────────────────────────────────────────── */
+
+.ocr-progress {
+  width: 100%;
+  height: 5px;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  background: rgba(40, 75, 99, 0.24);
+  margin-bottom: 8px;
+}
+
+.ocr-progress__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration-base) var(--ease-out);
+}
+
+/* ── OCR receipt summary ──────────────────────────────────────────────────── */
+
+.ocr-receipt-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+  font-size: 0.9rem;
+}
+
+.ocr-receipt-summary strong {
+  font-weight: 700;
+  font-size: 0.94rem;
+}
+
+.ocr-receipt-summary span {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+/* ── OCR grid layout override ─────────────────────────────────────────────── */
+
+.ocr-grid {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
