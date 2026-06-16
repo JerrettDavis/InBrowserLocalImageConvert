@@ -16,18 +16,18 @@
     "@axe-core/playwright": "^4.11.3",
     "@playwright/test": "^1.60.0",
     "@types/papaparse": "^5.5.2",
-    "axe-core": "^4.11.4",
+    "axe-core": "^4.12.1",
     "jsdom": "^29.1.1",
     "papaparse": "^5.5.3",
     "playwright": "^1.60.0",
     "typescript": "~6.0.2",
-    "vite": "^8.0.12",
-    "vitest": "^4.1.6"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
   },
   "dependencies": {
     "heic2any": "^0.0.4",
     "jszip": "^3.10.1",
-    "tesseract.js": "^5.1.1",
+    "tesseract.js": "^7.0.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
   }
 }
