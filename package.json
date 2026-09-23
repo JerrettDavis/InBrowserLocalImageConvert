@@ -17,12 +17,12 @@
     "@playwright/test": "^1.63.0",
     "@types/papaparse": "^5.5.2",
     "axe-core": "^4.12.1",
-    "jsdom": "^30.0.1",
+    "jsdom": "^30.1.0",
     "papaparse": "^5.7.0",
     "playwright": "^1.60.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   },
   "dependencies": {
     "heic2any": "^0.0.4",
